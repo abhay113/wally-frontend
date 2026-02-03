@@ -49,7 +49,7 @@ function AnimatedCounter({ value, duration = 1000 }: { value: number; duration?:
     }
 
     requestAnimationFrame(animate)
-  }, [value, duration])
+  })
 
   return <span>{formatCurrency(displayValue)}</span>
 }
