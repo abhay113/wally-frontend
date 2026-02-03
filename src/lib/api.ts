@@ -12,35 +12,77 @@ import type {
   FundWalletRequest,
 } from "./types";
 import { useAuthStore } from "./store";
+import { toast } from "sonner";
+import { env } from "@/config/env";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:3000/api/v1";
+const API_BASE_URL = env.apiUrl;
 
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
+  timeout: env.apiTimeout,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
-apiClient.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token;
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// Request interceptor - Add auth token
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = useAuthStore.getState().token;
+    const isTokenValid = useAuthStore.getState().isTokenValid;
 
+    if (token && isTokenValid()) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  },
+);
+
+// Response interceptor - Handle errors globally
 apiClient.interceptors.response.use(
   (response) => response,
-  (error: AxiosError) => {
+  (error: AxiosError<{ message?: string; error?: string }>) => {
     const status = error.response?.status;
     const token = useAuthStore.getState().token;
 
-    // 🔐 Only logout if user WAS logged in
+    // Extract error message
+    const errorMessage =
+      error.response?.data?.message ||
+      error.response?.data?.error ||
+      error.message ||
+      "An unexpected error occurred";
+
+    // Handle specific error cases
     if (status === 401 && token) {
+      // Unauthorized - token expired or invalid
       useAuthStore.getState().logout();
-      window.location.href = "/login";
+      toast.error("Session expired. Please login again.");
+
+      // Prevent navigation loops
+      if (!window.location.pathname.includes("/login")) {
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 100);
+      }
+    } else if (status === 403) {
+      toast.error("Access denied. You do not have permission.");
+    } else if (status === 404) {
+      // Don't show toast for 404s, let components handle it
+      console.warn("Resource not found:", error.config?.url);
+    } else if (status === 429) {
+      toast.error("Too many requests. Please try again later.");
+    } else if (status && status >= 500) {
+      toast.error("Server error. Please try again later.");
+    } else if (!error.response) {
+      // Network error
+      toast.error("Network error. Please check your connection.");
+    } else if (status && status >= 400 && status < 500) {
+      // Other client errors - show the message
+      toast.error(errorMessage);
     }
 
     return Promise.reject(error);
@@ -60,7 +102,12 @@ export const authApi = {
   },
 
   logout: async (): Promise<void> => {
-    await apiClient.post("/auth/logout");
+    try {
+      await apiClient.post("/auth/logout");
+    } catch (error) {
+      console.error("Logout error:", error);
+      // Still clear local state even if API call fails
+    }
   },
 
   me: async (): Promise<User> => {
@@ -72,7 +119,7 @@ export const authApi = {
 // Wallet API
 export const walletApi = {
   getWallet: async (): Promise<Wallet> => {
-    const response = await apiClient.get<Wallet>("/wallet");
+    const response = await apiClient.get<Wallet>("/users/me");
     return response.data;
   },
 
@@ -99,10 +146,8 @@ export const transactionsApi = {
     filter?: string;
   }): Promise<PaginatedResponse<Transaction>> => {
     const response = await apiClient.get<PaginatedResponse<Transaction>>(
-      "/transactions",
-      {
-        params,
-      },
+      "/transactions/history",
+      { params },
     );
     return response.data;
   },
@@ -120,10 +165,6 @@ export const userApi = {
     return response.data;
   },
 
-  getProfile: async (): Promise<User> => {
-    const response = await apiClient.get<User>("/user/profile");
-    return response.data;
-  },
 };
 
 // Admin API
@@ -140,9 +181,7 @@ export const adminApi = {
   }): Promise<PaginatedResponse<User>> => {
     const response = await apiClient.get<PaginatedResponse<User>>(
       "/admin/users",
-      {
-        params,
-      },
+      { params },
     );
     return response.data;
   },
