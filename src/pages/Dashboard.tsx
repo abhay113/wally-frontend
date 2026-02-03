@@ -174,7 +174,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Balance Card */}
-      <Card className="bg-gradient-to-br from-primary to-accent text-primary-foreground overflow-hidden relative">
+      <Card className="bg-linear-to-br from-primary to-accent text-primary-foreground overflow-hidden relative">
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30" />
         <CardHeader className="relative">
           <div className="flex items-center justify-between">
