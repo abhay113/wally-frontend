@@ -12,6 +12,16 @@ interface AuthState {
   isTokenValid: () => boolean;
 }
 
+type PersistedAuthState = Pick<AuthState, "user" | "token" | "tokenExpiry">;
+
+function isPersistedAuthState(value: unknown): value is PersistedAuthState {
+  if (typeof value !== "object" || value === null) return false;
+
+  const v = value as Record<string, unknown>;
+
+  return "user" in v && "token" in v && "tokenExpiry" in v;
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -19,31 +29,38 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       tokenExpiry: null,
 
-      setAuth: (user, token, expiresIn = 86400000) => {
-        // Default 24 hours in milliseconds
-        const expiry = Date.now() + expiresIn;
-        set({ user, token, tokenExpiry: expiry });
+      setAuth: (user, token, expiresIn = 86_400_000) => {
+        // Default: 24h
+        set({
+          user,
+          token,
+          tokenExpiry: Date.now() + expiresIn,
+        });
       },
 
       setUser: (user) => set({ user }),
 
-      logout: () => set({ user: null, token: null, tokenExpiry: null }),
+      logout: () =>
+        set({
+          user: null,
+          token: null,
+          tokenExpiry: null,
+        }),
 
       isTokenValid: () => {
         const { token, tokenExpiry } = get();
-        if (!token || !tokenExpiry) return false;
-        return Date.now() < tokenExpiry;
+        return Boolean(token && tokenExpiry && Date.now() < tokenExpiry);
       },
     }),
     {
       name: "wally-auth-storage",
       version: 1,
+
       storage: createJSONStorage(() => {
-        // Safe localStorage access with fallback
         try {
           return localStorage;
         } catch {
-          // Fallback for environments without localStorage (e.g., SSR, private browsing)
+          // SSR / restricted environments
           return {
             getItem: () => null,
             setItem: () => {},
@@ -51,29 +68,41 @@ export const useAuthStore = create<AuthState>()(
           };
         }
       }),
-      partialize: (state) => ({
+
+      partialize: (state): PersistedAuthState => ({
         user: state.user,
         token: state.token,
         tokenExpiry: state.tokenExpiry,
       }),
+
       onRehydrateStorage: () => (state) => {
-        // Clean up expired tokens on app load
         if (state && !state.isTokenValid()) {
-          console.log("Token expired on rehydration, logging out");
           state.logout();
         }
       },
 
-      migrate: (persistedState: any, version: number) => {
-        // Handle migrations if storage version changes
+      migrate: (
+        persistedState: unknown,
+        version: number,
+      ): PersistedAuthState => {
+        // Corrupted or missing storage
+        if (!isPersistedAuthState(persistedState)) {
+          return {
+            user: null,
+            token: null,
+            tokenExpiry: null,
+          };
+        }
+
+        // Example future migration
         if (version === 0) {
-          // Migrate from version 0 to 1 (add tokenExpiry)
           return {
             ...persistedState,
             tokenExpiry: null,
           };
         }
-        return persistedState as AuthState;
+
+        return persistedState;
       },
     },
   ),

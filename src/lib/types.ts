@@ -2,6 +2,9 @@ export interface User {
   id: string;
   email: string;
   handle: string;
+  // Added these fields to fix the error
+  firstName?: string;
+  lastName?: string;
   role: "user" | "admin";
   status: "active" | "blocked";
   createdAt: string;
@@ -26,16 +29,13 @@ export interface Transaction {
   note?: string;
   status: "pending" | "completed" | "failed";
   createdAt: string;
+  completedAt: string;
+  failureReason?: string;
 }
 
 export interface AuthResponse {
   user: User;
   token: string;
-}
-
-export interface ApiError {
-  message: string;
-  code?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -93,5 +93,51 @@ export interface FundWalletResponse {
 export interface TransactionsResponse {
   data: {
     transactions: Transaction[];
+  };
+}
+// 1. Structure for GET /wallet response
+export interface WalletApiResponse {
+  success: boolean;
+  data: {
+    id: string; // User ID
+    wallet: {
+      id: string;
+      balance: string;
+      status: string;
+      publicKey?: string;
+    };
+  };
+}
+
+// 2. Structure for GET /transactions response
+export interface HistoryApiResponse {
+  success: boolean;
+  data: {
+    transactions: Array<{
+      id: string;
+      type: "SENT" | "RECEIVED";
+      amount: string;
+      status: string; // "SUCCESS", "FAILED", etc.
+      createdAt: string;
+      note?: string;
+      counterparty: {
+        handle: string;
+      };
+    }>;
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  };
+}
+
+// 3. Interface to handle Axios-like error objects safely
+export interface ApiError {
+  response?: {
+    data?: {
+      message?: string;
+    };
   };
 }

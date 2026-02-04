@@ -27,81 +27,29 @@ import type { Transaction } from "@/lib/types";
 import { transactionsApi } from "@/lib/api";
 import { useDebounce } from "@/hooks";
 
-// Mock transactions for demo
-const mockTransactions: Transaction[] = [
-  {
-    id: "1",
-    senderId: "1",
-    senderHandle: "johndoe",
-    receiverId: "2",
-    receiverHandle: "janedoe",
-    amount: 150.0,
-    currency: "USD",
-    note: "Dinner split",
-    status: "completed",
-    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "2",
-    senderId: "3",
-    senderHandle: "mike_wilson",
-    receiverId: "1",
-    receiverHandle: "johndoe",
-    amount: 500.0,
-    currency: "USD",
-    note: "Project payment",
-    status: "completed",
-    createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "3",
-    senderId: "1",
-    senderHandle: "johndoe",
-    receiverId: "4",
-    receiverHandle: "sarah_smith",
-    amount: 75.0,
-    currency: "USD",
-    note: "Coffee supplies",
-    status: "completed",
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "4",
-    senderId: "5",
-    senderHandle: "alex_brown",
-    receiverId: "1",
-    receiverHandle: "johndoe",
-    amount: 200.0,
-    currency: "USD",
-    note: "Birthday gift",
-    status: "completed",
-    createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "5",
-    senderId: "1",
-    senderHandle: "johndoe",
-    receiverId: "6",
-    receiverHandle: "emily_davis",
-    amount: 50.0,
-    currency: "USD",
-    note: "Movie tickets",
-    status: "completed",
-    createdAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "6",
-    senderId: "7",
-    senderHandle: "chris_lee",
-    receiverId: "1",
-    receiverHandle: "johndoe",
-    amount: 1000.0,
-    currency: "USD",
-    note: "Rent payment",
-    status: "completed",
-    createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-];
+// Interface matching the specific API response structure
+interface HistoryApiResponse {
+  success: boolean;
+  data: {
+    transactions: Array<{
+      id: string;
+      type: "SENT" | "RECEIVED";
+      counterparty: {
+        handle: string;
+      };
+      amount: string;
+      status: string;
+      createdAt: string;
+      note?: string;
+    }>;
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  };
+}
 
 // Loading skeleton component
 function TransactionSkeleton({ count = 3 }: { count?: number }) {
@@ -135,8 +83,7 @@ export default function HistoryPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuthStore();
-  const [transactions, setTransactions] =
-    useState<Transaction[]>(mockTransactions);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [totalPages, setTotalPages] = useState(1);
   const [searchInput, setSearchInput] = useState(
@@ -173,58 +120,64 @@ export default function HistoryPage() {
     setIsLoading(true);
 
     try {
-      const response = await transactionsApi.getHistory({
+      // We cast the response to unknown first, then to our expected type
+      // because the generic api return type might differ from the specific structure
+      const response = (await transactionsApi.getHistory({
         page,
         limit: 10,
         search: debouncedSearch,
         filter: filter !== "all" ? filter : undefined,
-      });
+      })) as unknown as HistoryApiResponse;
 
-      // Validate response data
-      if (response && response.data && Array.isArray(response.data)) {
-        setTransactions(response.data);
-        setTotalPages(response.totalPages || 1);
+      // Validate response data structure
+      if (
+        response?.data?.transactions &&
+        Array.isArray(response.data.transactions)
+      ) {
+        const mappedTransactions: Transaction[] =
+          response.data.transactions.map((tx) => {
+            const isSent = tx.type === "SENT";
+            const currentUserHandle = user?.handle || "Me";
+
+            return {
+              id: tx.id,
+              // Map sender/receiver based on SENT/RECEIVED type
+              senderHandle: isSent ? currentUserHandle : tx.counterparty.handle,
+              senderId: "", // Not provided in list view
+              receiverHandle: isSent
+                ? tx.counterparty.handle
+                : currentUserHandle,
+              receiverId: "", // Not provided in list view
+              amount: parseFloat(tx.amount),
+              currency: "XLM",
+              note: tx.note || "",
+              // Standardize status for UI
+              status:
+                tx.status === "SUCCESS"
+                  ? "completed"
+                  : (tx.status.toLowerCase() as
+                      | "pending"
+                      | "completed"
+                      | "failed"),
+              createdAt: tx.createdAt,
+            };
+          });
+
+        setTransactions(mappedTransactions);
+        setTotalPages(response.data.pagination?.totalPages || 1);
       } else {
-        console.warn("Invalid transaction response:", response);
-        throw new Error("Invalid response format");
-      }
-    } catch (error: any) {
-      if (error.name !== "AbortError") {
-        console.error("Fetch transactions error:", error);
-
-        // Use mock data with client-side filtering
-        let filtered = [...mockTransactions];
-
-        // Apply filter
-        if (filter === "sent") {
-          filtered = filtered.filter((tx) => tx.senderHandle === user?.handle);
-        } else if (filter === "received") {
-          filtered = filtered.filter(
-            (tx) => tx.receiverHandle === user?.handle,
-          );
-        }
-
-        // Apply search
-        if (debouncedSearch) {
-          const searchLower = debouncedSearch.toLowerCase();
-          filtered = filtered.filter(
-            (tx) =>
-              tx.senderHandle.toLowerCase().includes(searchLower) ||
-              tx.receiverHandle.toLowerCase().includes(searchLower) ||
-              tx.note?.toLowerCase().includes(searchLower),
-          );
-        }
-
-        setTransactions(filtered);
+        setTransactions([]);
         setTotalPages(1);
+      }
+    } catch (error: unknown) {
+      // Type guard for AbortError
+      const isAbortError =
+        error instanceof Error && error.name === "AbortError";
 
-        // Show error only if not a network error (demo mode)
-        if (
-          !error.message?.includes("Network") &&
-          error.response?.status !== 404
-        ) {
-          toast.error("Failed to load transactions. Using offline data.");
-        }
+      if (!isAbortError) {
+        console.error("Fetch transactions error:", error);
+        toast.error("Failed to load transactions.");
+        setTransactions([]);
       }
     } finally {
       if (!abortControllerRef.current?.signal.aborted) {
@@ -267,10 +220,8 @@ export default function HistoryPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const isOutgoing = (tx: Transaction) => tx.senderHandle === user?.handle;
-
-  // Ensure transactions is always an array
-  const safeTransactions = Array.isArray(transactions) ? transactions : [];
+  const isOutgoing = (tx: Transaction) =>
+    tx.senderHandle === user?.handle || tx.senderHandle === "Me";
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -323,7 +274,7 @@ export default function HistoryPage() {
         <CardContent>
           {isLoading ? (
             <TransactionSkeleton count={5} />
-          ) : safeTransactions.length === 0 ? (
+          ) : transactions.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <p className="text-lg">No transactions found</p>
               <p className="text-sm">
@@ -334,7 +285,7 @@ export default function HistoryPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {safeTransactions.map((tx, index) => (
+              {transactions.map((tx, index) => (
                 <div
                   key={tx.id}
                   className="flex items-center justify-between p-4 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors animate-fade-in focus:outline-none focus:ring-2 focus:ring-primary"
