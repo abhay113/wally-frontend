@@ -27,6 +27,7 @@ import {
 import { transactionsApi } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import { generateIdempotencyKey, formatCurrency } from "@/lib/utils";
+import { AxiosError } from "axios";
 
 const sendSchema = z.object({
   recipientHandle: z
@@ -145,26 +146,35 @@ export default function SendPage() {
       });
       setShowSuccess(true);
       toast.success("Transaction completed successfully!");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Transfer error:", error);
 
-      // Extract error message
-      const message =
-        error.response?.data?.message ||
-        error.response?.data?.error ||
-        "Failed to send money. Please try again.";
+      let message = "Failed to send money. Please try again.";
 
-      // Handle specific error cases
-      if (error.response?.status === 400) {
-        // Bad request - could be insufficient balance, invalid recipient, etc.
-        toast.error(message);
-      } else if (error.response?.status === 404) {
-        toast.error("Recipient not found. Please check the handle.");
-      } else if (error.response?.status === 422) {
-        toast.error("Invalid transaction details. Please check your input.");
-      } else {
-        toast.error(message);
+      if (error instanceof AxiosError) {
+        message =
+          error.response?.data?.message ||
+          error.response?.data?.error ||
+          message;
+
+        switch (error.response?.status) {
+          case 400:
+            toast.error(message);
+            return;
+
+          case 404:
+            toast.error("Recipient not found. Please check the handle.");
+            return;
+
+          case 422:
+            toast.error(
+              "Invalid transaction details. Please check your input.",
+            );
+            return;
+        }
       }
+
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
