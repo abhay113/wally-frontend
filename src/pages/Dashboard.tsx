@@ -27,7 +27,7 @@ import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import type { Transaction, Wallet as WalletType } from "@/lib/types";
 import { walletApi, transactionsApi } from "@/lib/api";
 
-// Animated counter component
+// Animated counter component with High Precision Support
 function AnimatedCounter({
   value,
   duration = 1000,
@@ -64,64 +64,27 @@ function AnimatedCounter({
     requestAnimationFrame(animate);
   }, [value, duration]);
 
-  return <span>{formatCurrency(displayValue)}</span>;
+  // Use inline formatter to support high precision (up to 8 decimals)
+  return (
+    <span>
+      {displayValue.toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 8,
+      })}
+    </span>
+  );
 }
-
-// Mock data
-const mockWallet: WalletType = {
-  id: "1",
-  userId: "1",
-  balance: 5432.5,
-  currency: "USD",
-  updatedAt: new Date().toISOString(),
-};
-
-const mockTransactions: Transaction[] = [
-  {
-    id: "1",
-    senderId: "1",
-    senderHandle: "johndoe",
-    receiverId: "2",
-    receiverHandle: "janedoe",
-    amount: 150.0,
-    currency: "USD",
-    note: "Dinner split",
-    status: "completed",
-    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "2",
-    senderId: "3",
-    senderHandle: "mike_wilson",
-    receiverId: "1",
-    receiverHandle: "johndoe",
-    amount: 500.0,
-    currency: "USD",
-    note: "Project payment",
-    status: "completed",
-    createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    id: "3",
-    senderId: "1",
-    senderHandle: "johndoe",
-    receiverId: "4",
-    receiverHandle: "sarah_smith",
-    amount: 75.0,
-    currency: "USD",
-    note: "Coffee supplies",
-    status: "completed",
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-  },
-];
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const [wallet, setWallet] = useState<WalletType>(mockWallet);
-  const [transactions, setTransactions] =
-    useState<Transaction[]>(mockTransactions);
-  const [isSyncing, setIsSyncing] = useState(false);
+
+  const [wallet, setWallet] = useState<WalletType | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+
+  const [isSyncing, setIsSyncing] = useState(true);
   const [fundAmount, setFundAmount] = useState("");
   const [isFunding, setIsFunding] = useState(false);
   const [fundDialogOpen, setFundDialogOpen] = useState(false);
@@ -137,37 +100,77 @@ export default function DashboardPage() {
     setIsSyncing(true);
 
     try {
-      const [walletData, transactionsData] = await Promise.all([
+      const [walletResponse, transactionsResponse] = await Promise.all([
         walletApi.getWallet(),
         transactionsApi.getHistory({ limit: 5 }),
       ]);
+      console.log("wallet response data : ", walletResponse);
 
-      setWallet(walletData);
+      // --- Handle Wallet Response ---
+      const walletApiData = (walletResponse as any).data || walletResponse;
 
-      // Validate that transactionsData.data is an array
-      if (
-        transactionsData &&
-        transactionsData.data &&
-        Array.isArray(transactionsData.data)
-      ) {
-        setTransactions(transactionsData.data);
+      if (walletApiData?.wallet) {
+        const walletInfo = walletApiData.wallet;
+        setWallet({
+          id: walletInfo.id,
+          userId: walletApiData.id,
+          balance: parseFloat(walletInfo.balance),
+          currency: "USD",
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      // --- Handle Transactions Response ---
+      // Expected API Structure: { success: true, data: { transactions: [...], pagination: {...} } }
+      const txApiData =
+        (transactionsResponse as any).data || transactionsResponse;
+      const rawTransactions =
+        txApiData?.data?.transactions || txApiData?.transactions;
+
+      if (Array.isArray(rawTransactions)) {
+        const mappedTransactions: Transaction[] = rawTransactions.map(
+          (t: any) => {
+            // Logic to map API "SENT/RECEIVED" type to senderHandle/receiverHandle
+            const isSent = t.type === "SENT";
+
+            return {
+              id: t.id,
+              // If sent, current user is sender. If received, counterparty is sender.
+              senderHandle: isSent
+                ? user?.handle || "Me"
+                : t.counterparty.handle,
+              senderId: "", // Not provided in list view, optional
+              // If sent, counterparty is receiver. If received, current user is receiver.
+              receiverHandle: isSent
+                ? t.counterparty.handle
+                : user?.handle || "Me",
+              receiverId: "", // Not provided in list view, optional
+
+              amount: parseFloat(t.amount),
+              currency: "USD",
+              note: t.note || "", // API might not have note in list view
+              // Map "SUCCESS" to "completed" for UI styling
+              status:
+                t.status === "SUCCESS" ? "completed" : t.status.toLowerCase(),
+              createdAt: t.createdAt,
+            };
+          },
+        );
+        setTransactions(mappedTransactions);
       } else {
-        console.warn("Invalid transaction data received:", transactionsData);
-        setTransactions(mockTransactions);
+        setTransactions([]);
       }
     } catch (error: any) {
       if (error.name !== "AbortError") {
         console.error("Fetch error:", error);
-        // Keep using mock data
-        setWallet(mockWallet);
-        setTransactions(mockTransactions);
+        toast.error("Failed to load dashboard data");
       }
     } finally {
       if (!abortControllerRef.current?.signal.aborted) {
         setIsSyncing(false);
       }
     }
-  }, []);
+  }, [user?.handle]); // Dependency added so handles update if user loads late
 
   useEffect(() => {
     fetchData();
@@ -202,40 +205,39 @@ export default function DashboardPage() {
     setIsFunding(true);
     try {
       const updated = await walletApi.fund({ amount });
-      setWallet(updated);
+
+      // Optimistically update or re-fetch
+      const apiData = (updated as any).data || updated;
+      if (apiData?.wallet) {
+        setWallet((prev) =>
+          prev
+            ? {
+                ...prev,
+                balance: parseFloat(apiData.wallet.balance),
+              }
+            : null,
+        );
+      } else {
+        fetchData();
+      }
+
       toast.success(`Successfully added ${formatCurrency(amount)}`);
       setFundDialogOpen(false);
       setFundAmount("");
     } catch (error: any) {
       console.error("Fund error:", error);
-
-      // Check if it's a demo/development environment
-      const isDemoMode =
-        error.response?.status === 404 || error.message?.includes("Network");
-
-      if (isDemoMode) {
-        // Demo mode - update locally
-        setWallet((prev) => ({
-          ...prev,
-          balance: prev.balance + amount,
-        }));
-        toast.success(`Successfully added ${formatCurrency(amount)} (Demo)`);
-        setFundDialogOpen(false);
-        setFundAmount("");
-      } else {
-        const message =
-          error.response?.data?.message ||
-          "Failed to add funds. Please try again.";
-        toast.error(message);
-      }
+      const message =
+        error.response?.data?.message ||
+        "Failed to add funds. Please try again.";
+      toast.error(message);
     } finally {
       setIsFunding(false);
     }
   };
 
-  const isOutgoing = (tx: Transaction) => tx.senderHandle === user?.handle;
+  const isOutgoing = (tx: Transaction) =>
+    tx.senderHandle === user?.handle || tx.senderHandle === "Me";
 
-  // Ensure transactions is always an array
   const safeTransactions = Array.isArray(transactions) ? transactions : [];
 
   return (
@@ -273,9 +275,15 @@ export default function DashboardPage() {
           </div>
         </CardHeader>
         <CardContent className="relative">
-          <div className="text-4xl font-bold mb-4">
-            <AnimatedCounter value={wallet.balance} />
-          </div>
+          {wallet ? (
+            <div className="text-4xl font-bold mb-4">
+              <AnimatedCounter value={wallet.balance} />
+            </div>
+          ) : (
+            // Loading Skeleton for Balance
+            <div className="h-10 w-48 bg-white/20 animate-pulse rounded mb-4" />
+          )}
+
           <div className="flex gap-3">
             <Dialog open={fundDialogOpen} onOpenChange={setFundDialogOpen}>
               <DialogTrigger asChild>
@@ -396,7 +404,24 @@ export default function DashboardPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {safeTransactions.length === 0 ? (
+          {isSyncing && transactions.length === 0 ? (
+            // Loading Skeleton for Transactions
+            <div className="space-y-4">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-4 p-2 animate-pulse"
+                >
+                  <div className="h-10 w-10 rounded-full bg-muted" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-32 bg-muted rounded" />
+                    <div className="h-3 w-20 bg-muted rounded" />
+                  </div>
+                  <div className="h-4 w-16 bg-muted rounded" />
+                </div>
+              ))}
+            </div>
+          ) : safeTransactions.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <Wallet className="h-12 w-12 mx-auto mb-3 opacity-50" />
               <p>No transactions yet</p>
@@ -417,7 +442,6 @@ export default function DashboardPage() {
                       navigate(`/history/${tx.id}`);
                     }
                   }}
-                  aria-label={`Transaction: ${isOutgoing(tx) ? "Sent" : "Received"} ${formatCurrency(tx.amount)} ${isOutgoing(tx) ? "to" : "from"} @${isOutgoing(tx) ? tx.receiverHandle : tx.senderHandle}`}
                 >
                   <div className="flex items-center gap-3">
                     <div
@@ -443,15 +467,29 @@ export default function DashboardPage() {
                       </p>
                     </div>
                   </div>
-                  <p
-                    className={cn(
-                      "font-semibold",
-                      isOutgoing(tx) ? "text-destructive" : "text-success",
-                    )}
-                  >
-                    {isOutgoing(tx) ? "-" : "+"}
-                    {formatCurrency(tx.amount)}
-                  </p>
+                  <div className="text-right">
+                    <p
+                      className={cn(
+                        "font-semibold",
+                        isOutgoing(tx) ? "text-destructive" : "text-success",
+                      )}
+                    >
+                      {isOutgoing(tx) ? "-" : "+"}
+                      {formatCurrency(tx.amount)}
+                    </p>
+                    <span
+                      className={cn(
+                        "text-[10px] px-2 py-0.5 rounded-full inline-block mt-1",
+                        tx.status === "completed"
+                          ? "bg-success/10 text-success"
+                          : tx.status === "failed"
+                            ? "bg-destructive/10 text-destructive"
+                            : "bg-yellow-500/10 text-yellow-600",
+                      )}
+                    >
+                      {tx.status}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
