@@ -1,4 +1,5 @@
 "use client";
+
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -24,8 +25,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuthStore } from "@/lib/store";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
-import type { Transaction, Wallet as WalletType } from "@/lib/types";
+import type {
+  ApiError,
+  HistoryApiResponse,
+  Transaction,
+  WalletApiResponse,
+  Wallet as WalletType,
+} from "@/lib/types";
 import { walletApi, transactionsApi } from "@/lib/api";
+
+// --- Types Definitions ---
 
 // Animated counter component with High Precision Support
 function AnimatedCounter({
@@ -54,6 +63,7 @@ function AnimatedCounter({
 
       const current =
         startValue.current + (value - startValue.current) * easeOutQuart;
+
       setDisplayValue(current);
 
       if (progress < 1) {
@@ -62,14 +72,14 @@ function AnimatedCounter({
     };
 
     requestAnimationFrame(animate);
-  }, [value, duration]);
+  });
 
   // Use inline formatter to support high precision (up to 8 decimals)
   return (
     <span>
       {displayValue.toLocaleString("en-US", {
         style: "currency",
-        currency: "USD",
+        currency: "XLM",
         minimumFractionDigits: 2,
         maximumFractionDigits: 8,
       })}
@@ -90,6 +100,13 @@ export default function DashboardPage() {
   const [fundDialogOpen, setFundDialogOpen] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // --- Display Name Logic ---
+  const displayName = user?.firstName
+    ? user.firstName
+    : user?.handle
+      ? `@${user.handle}`
+      : "User";
+
   const fetchData = useCallback(async () => {
     // Cancel previous request
     if (abortControllerRef.current) {
@@ -100,58 +117,57 @@ export default function DashboardPage() {
     setIsSyncing(true);
 
     try {
-      const [walletResponse, transactionsResponse] = await Promise.all([
+      const [walletRes, transactionsRes] = await Promise.all([
         walletApi.getWallet(),
         transactionsApi.getHistory({ limit: 5 }),
       ]);
-      console.log("wallet response data : ", walletResponse);
+
+      const walletResponse = walletRes as unknown as WalletApiResponse;
+      const transactionsResponse =
+        transactionsRes as unknown as HistoryApiResponse;
 
       // --- Handle Wallet Response ---
-      const walletApiData = (walletResponse as any).data || walletResponse;
+      const walletData = walletResponse.data ? walletResponse.data : undefined;
 
-      if (walletApiData?.wallet) {
-        const walletInfo = walletApiData.wallet;
+      if (walletData?.wallet) {
         setWallet({
-          id: walletInfo.id,
-          userId: walletApiData.id,
-          balance: parseFloat(walletInfo.balance),
-          currency: "USD",
+          id: walletData.wallet.id,
+          userId: walletData.id,
+          balance: parseFloat(walletData.wallet.balance),
+          currency: "XLM",
           updatedAt: new Date().toISOString(),
         });
       }
 
       // --- Handle Transactions Response ---
-      // Expected API Structure: { success: true, data: { transactions: [...], pagination: {...} } }
-      const txApiData =
-        (transactionsResponse as any).data || transactionsResponse;
-      const rawTransactions =
-        txApiData?.data?.transactions || txApiData?.transactions;
+      const txData = transactionsResponse.data
+        ? transactionsResponse.data
+        : undefined;
 
-      if (Array.isArray(rawTransactions)) {
-        const mappedTransactions: Transaction[] = rawTransactions.map(
-          (t: any) => {
-            // Logic to map API "SENT/RECEIVED" type to senderHandle/receiverHandle
+      if (txData?.transactions && Array.isArray(txData.transactions)) {
+        const mappedTransactions: Transaction[] = txData.transactions.map(
+          (t) => {
             const isSent = t.type === "SENT";
+            const currentUserHandle = user?.handle || "Me";
 
             return {
               id: t.id,
-              // If sent, current user is sender. If received, counterparty is sender.
-              senderHandle: isSent
-                ? user?.handle || "Me"
-                : t.counterparty.handle,
-              senderId: "", // Not provided in list view, optional
-              // If sent, counterparty is receiver. If received, current user is receiver.
+              senderHandle: isSent ? currentUserHandle : t.counterparty.handle,
+              senderId: "",
               receiverHandle: isSent
                 ? t.counterparty.handle
-                : user?.handle || "Me",
-              receiverId: "", // Not provided in list view, optional
-
+                : currentUserHandle,
+              receiverId: "",
               amount: parseFloat(t.amount),
-              currency: "USD",
-              note: t.note || "", // API might not have note in list view
-              // Map "SUCCESS" to "completed" for UI styling
+              currency: "XLM",
+              note: t.note || "",
               status:
-                t.status === "SUCCESS" ? "completed" : t.status.toLowerCase(),
+                t.status === "SUCCESS"
+                  ? "completed"
+                  : (t.status.toLowerCase() as
+                      | "completed"
+                      | "pending"
+                      | "failed"),
               createdAt: t.createdAt,
             };
           },
@@ -160,8 +176,11 @@ export default function DashboardPage() {
       } else {
         setTransactions([]);
       }
-    } catch (error: any) {
-      if (error.name !== "AbortError") {
+    } catch (error: unknown) {
+      const isAbortError =
+        error instanceof Error && error.name === "AbortError";
+
+      if (!isAbortError) {
         console.error("Fetch error:", error);
         toast.error("Failed to load dashboard data");
       }
@@ -170,7 +189,7 @@ export default function DashboardPage() {
         setIsSyncing(false);
       }
     }
-  }, [user?.handle]); // Dependency added so handles update if user loads late
+  }, [user?.handle]);
 
   useEffect(() => {
     fetchData();
@@ -204,16 +223,16 @@ export default function DashboardPage() {
 
     setIsFunding(true);
     try {
-      const updated = await walletApi.fund({ amount });
+      const updated = (await walletApi.fund({
+        amount,
+      })) as unknown as WalletApiResponse;
 
-      // Optimistically update or re-fetch
-      const apiData = (updated as any).data || updated;
-      if (apiData?.wallet) {
+      if (updated?.data?.wallet) {
         setWallet((prev) =>
           prev
             ? {
                 ...prev,
-                balance: parseFloat(apiData.wallet.balance),
+                balance: parseFloat(updated.data.wallet.balance),
               }
             : null,
         );
@@ -224,11 +243,16 @@ export default function DashboardPage() {
       toast.success(`Successfully added ${formatCurrency(amount)}`);
       setFundDialogOpen(false);
       setFundAmount("");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Fund error:", error);
-      const message =
-        error.response?.data?.message ||
-        "Failed to add funds. Please try again.";
+      let message = "Failed to add funds. Please try again.";
+
+      // Type-safe error handling without 'any'
+      const apiError = error as ApiError;
+      if (apiError?.response?.data?.message) {
+        message = apiError.response.data.message;
+      }
+
       toast.error(message);
     } finally {
       setIsFunding(false);
@@ -245,7 +269,7 @@ export default function DashboardPage() {
       {/* Welcome Header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">
-          Welcome back, {user?.handle || "User"}
+          Welcome back, {displayName}
         </h1>
         <p className="text-muted-foreground">
           Here's an overview of your wallet
