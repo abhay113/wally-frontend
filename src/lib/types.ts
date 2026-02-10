@@ -29,7 +29,7 @@ export interface Transaction {
   note?: string;
   status: "pending" | "completed" | "failed";
   createdAt: string;
-  completedAt: string;
+  completedAt?: string;
   failureReason?: string;
 }
 
