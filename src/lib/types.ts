@@ -36,6 +36,8 @@ export interface Transaction {
 export interface AuthResponse {
   user: User;
   token: string;
+  refreshToken: string;
+  expiresIn: number;
 }
 
 export interface PaginatedResponse<T> {

@@ -103,10 +103,15 @@ export const authApi = {
 
   logout: async (): Promise<void> => {
     try {
-      await apiClient.post("/auth/logout");
+      const refreshToken = useAuthStore.getState().refreshToken;
+
+      if (!refreshToken) return;
+
+      await apiClient.post("/auth/logout", {
+        refreshToken,
+      });
     } catch (error) {
       console.error("Logout error:", error);
-      // Still clear local state even if API call fails
     }
   },
 
@@ -164,7 +169,6 @@ export const userApi = {
     const response = await apiClient.patch<User>("/user/handle", { handle });
     return response.data;
   },
-
 };
 
 // Admin API

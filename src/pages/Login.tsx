@@ -45,7 +45,10 @@ export default function LoginPage() {
     setIsLoading(true);
     try {
       const response = await authApi.login(data);
-      setAuth(response.user, response.token);
+
+      console.log("LOGIN RESPONSE:", response);
+
+      setAuth(response.user, response.token, response.refreshToken, response.expiresIn);
       toast.success("Welcome back!");
       navigate("/dashboard");
     } catch (error) {
