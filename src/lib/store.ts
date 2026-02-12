@@ -6,20 +6,31 @@ interface AuthState {
   user: User | null;
   token: string | null;
   tokenExpiry: number | null;
-  setAuth: (user: User, token: string, expiresIn?: number) => void;
+  refreshToken: string | null;
+  setAuth: (
+    user: User,
+    token: string,
+    refreshToken: string,
+    expiresIn?: number,
+  ) => void;
   setUser: (user: User) => void;
   logout: () => void;
   isTokenValid: () => boolean;
 }
 
-type PersistedAuthState = Pick<AuthState, "user" | "token" | "tokenExpiry">;
+type PersistedAuthState = Pick<
+  AuthState,
+  "user" | "token" | "tokenExpiry" | "refreshToken"
+>;
 
 function isPersistedAuthState(value: unknown): value is PersistedAuthState {
   if (typeof value !== "object" || value === null) return false;
 
   const v = value as Record<string, unknown>;
 
-  return "user" in v && "token" in v && "tokenExpiry" in v;
+  return (
+    "user" in v && "token" in v && "tokenExpiry" in v && "refreshToken" in v
+  );
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -27,13 +38,15 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       user: null,
       token: null,
+      refreshToken: null,
       tokenExpiry: null,
 
-      setAuth: (user, token, expiresIn = 86_400_000) => {
+      setAuth: (user, token, refreshToken, expiresIn = 86_400_000) => {
         // Default: 24h
         set({
           user,
           token,
+          refreshToken,
           tokenExpiry: Date.now() + expiresIn,
         });
       },
@@ -44,6 +57,7 @@ export const useAuthStore = create<AuthState>()(
         set({
           user: null,
           token: null,
+          refreshToken: null,
           tokenExpiry: null,
         }),
 
@@ -72,6 +86,7 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state): PersistedAuthState => ({
         user: state.user,
         token: state.token,
+        refreshToken: state.refreshToken,
         tokenExpiry: state.tokenExpiry,
       }),
 
@@ -85,20 +100,20 @@ export const useAuthStore = create<AuthState>()(
         persistedState: unknown,
         version: number,
       ): PersistedAuthState => {
-        // Corrupted or missing storage
         if (!isPersistedAuthState(persistedState)) {
           return {
             user: null,
             token: null,
             tokenExpiry: null,
+            refreshToken: null,
           };
         }
 
-        // Example future migration
         if (version === 0) {
           return {
             ...persistedState,
             tokenExpiry: null,
+            refreshToken: null,
           };
         }
 
