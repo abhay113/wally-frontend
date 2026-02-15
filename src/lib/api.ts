@@ -11,11 +11,34 @@ import type {
   TransferRequest,
   FundWalletRequest,
 } from "./types";
-import { useAuthStore } from "./store";
 import { toast } from "sonner";
 import { env } from "@/config/env";
 
 const API_BASE_URL = env.apiUrl;
+
+// Store reference to avoid circular dependencies
+let getAuthToken: (() => string | null) | null = null;
+let getRefreshToken: (() => string | null) | null = null;
+let isTokenValid: (() => boolean) | null = null;
+let logoutUser: (() => void) | null = null;
+let updateTokens:
+  | ((tokens: { token: string; refreshToken: string }) => void)
+  | null = null;
+
+// Initialize auth store references
+export const initializeApiClient = (authStore: {
+  getToken: () => string | null;
+  getRefreshToken: () => string | null;
+  isTokenValid: () => boolean;
+  logout: () => void;
+  updateTokens: (tokens: { token: string; refreshToken: string }) => void;
+}) => {
+  getAuthToken = authStore.getToken;
+  getRefreshToken = authStore.getRefreshToken;
+  isTokenValid = authStore.isTokenValid;
+  logoutUser = authStore.logout;
+  updateTokens = authStore.updateTokens;
+};
 
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -25,16 +48,37 @@ const apiClient: AxiosInstance = axios.create({
   },
 });
 
+// Flag to prevent multiple simultaneous logout toasts
+let isLoggingOut = false;
+
+// Queue for requests waiting for token refresh
+let isRefreshing = false;
+let failedQueue: Array<{
+  resolve: (value?: unknown) => void;
+  reject: (reason?: unknown) => void;
+}> = [];
+
+const processQueue = (error: Error | null, token: string | null = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+
+  failedQueue = [];
+};
+
 // Request interceptor - Add auth token
 apiClient.interceptors.request.use(
   (config) => {
-    const token = useAuthStore.getState().token;
-    const isTokenValid = useAuthStore.getState().isTokenValid;
-
-    if (token && isTokenValid()) {
-      config.headers.Authorization = `Bearer ${token}`;
+    if (getAuthToken) {
+      const token = getAuthToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
-
     return config;
   },
   (error) => {
@@ -45,9 +89,11 @@ apiClient.interceptors.request.use(
 // Response interceptor - Handle errors globally
 apiClient.interceptors.response.use(
   (response) => response,
-  (error: AxiosError<{ message?: string; error?: string }>) => {
+  async (error: AxiosError<{ message?: string; error?: string }>) => {
+    const originalRequest = error.config as typeof error.config & {
+      _retry?: boolean;
+    };
     const status = error.response?.status;
-    const token = useAuthStore.getState().token;
 
     // Extract error message
     const errorMessage =
@@ -56,19 +102,103 @@ apiClient.interceptors.response.use(
       error.message ||
       "An unexpected error occurred";
 
-    // Handle specific error cases
-    if (status === 401 && token) {
-      // Unauthorized - token expired or invalid
-      useAuthStore.getState().logout();
-      toast.error("Session expired. Please login again.");
-
-      // Prevent navigation loops
-      if (!window.location.pathname.includes("/login")) {
-        setTimeout(() => {
-          window.location.href = "/login";
-        }, 100);
+    // Handle 401 - Unauthorized (token refresh logic)
+    if (status === 401 && originalRequest && !originalRequest._retry) {
+      if (isRefreshing) {
+        // Wait for the token refresh to complete
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then(() => {
+            return apiClient(originalRequest);
+          })
+          .catch((err) => {
+            return Promise.reject(err);
+          });
       }
-    } else if (status === 403) {
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      const refreshToken = getRefreshToken?.();
+
+      if (refreshToken) {
+        try {
+          // Attempt to refresh the token
+          const response = await axios.post<AuthResponse>(
+            `${API_BASE_URL}/auth/refresh`,
+            { refreshToken },
+          );
+
+          const { token, refreshToken: newRefreshToken } = response.data;
+
+          // Update tokens in store
+          updateTokens?.({ token, refreshToken: newRefreshToken });
+
+          // Update header for original request
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+
+          // Process queued requests
+          processQueue(null, token);
+
+          isRefreshing = false;
+
+          // Retry original request
+          return apiClient(originalRequest);
+        } catch (refreshError) {
+          processQueue(refreshError as Error, null);
+          isRefreshing = false;
+
+          // Refresh failed - logout user
+          if (!isLoggingOut) {
+            isLoggingOut = true;
+            logoutUser?.();
+            toast.error("Session expired. Please login again.");
+
+            // Navigate to login (only in browser environment)
+            if (
+              typeof window !== "undefined" &&
+              !window.location.pathname.includes("/login")
+            ) {
+              setTimeout(() => {
+                window.location.href = "/login";
+                isLoggingOut = false;
+              }, 100);
+            } else {
+              isLoggingOut = false;
+            }
+          }
+
+          return Promise.reject(refreshError);
+        }
+      } else {
+        // No refresh token available - logout
+        isRefreshing = false;
+
+        if (!isLoggingOut) {
+          isLoggingOut = true;
+          logoutUser?.();
+          toast.error("Session expired. Please login again.");
+
+          if (
+            typeof window !== "undefined" &&
+            !window.location.pathname.includes("/login")
+          ) {
+            setTimeout(() => {
+              window.location.href = "/login";
+              isLoggingOut = false;
+            }, 100);
+          } else {
+            isLoggingOut = false;
+          }
+        }
+
+        return Promise.reject(error);
+      }
+    }
+
+    // Handle other errors
+    if (status === 403) {
       toast.error("Access denied. You do not have permission.");
     } else if (status === 404) {
       // Don't show toast for 404s, let components handle it
@@ -80,7 +210,13 @@ apiClient.interceptors.response.use(
     } else if (!error.response) {
       // Network error
       toast.error("Network error. Please check your connection.");
-    } else if (status && status >= 400 && status < 500) {
+    } else if (
+      status &&
+      status >= 400 &&
+      status < 500 &&
+      status !== 401 &&
+      status !== 404
+    ) {
       // Other client errors - show the message
       toast.error(errorMessage);
     }
@@ -103,20 +239,30 @@ export const authApi = {
 
   logout: async (): Promise<void> => {
     try {
-      const refreshToken = useAuthStore.getState().refreshToken;
+      const refreshToken = getRefreshToken?.();
+      if (!refreshToken) {
+        console.warn("No refresh token available for logout");
+        return;
+      }
 
-      if (!refreshToken) return;
-
-      await apiClient.post("/auth/logout", {
-        refreshToken,
-      });
+      await apiClient.post("/auth/logout", { refreshToken });
     } catch (error) {
-      console.error("Logout error:", error);
+      // Log the error but don't prevent logout on client side
+      console.error("Logout API error:", error);
+      // Still allow the error to be handled by caller if needed
+      throw error;
     }
   },
 
   me: async (): Promise<User> => {
     const response = await apiClient.get<User>("/auth/me");
+    return response.data;
+  },
+
+  refresh: async (refreshToken: string): Promise<AuthResponse> => {
+    const response = await apiClient.post<AuthResponse>("/auth/refresh", {
+      refreshToken,
+    });
     return response.data;
   },
 };
@@ -185,7 +331,9 @@ export const adminApi = {
   }): Promise<PaginatedResponse<User>> => {
     const response = await apiClient.get<PaginatedResponse<User>>(
       "/admin/users",
-      { params },
+      {
+        params,
+      },
     );
     return response.data;
   },
