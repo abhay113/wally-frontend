@@ -16,6 +16,15 @@ interface AuthState {
   setUser: (user: User) => void;
   logout: () => void;
   isTokenValid: () => boolean;
+  updateTokens: ({
+    token,
+    refreshToken,
+    expiresIn,
+  }: {
+    token: string;
+    refreshToken: string;
+    expiresIn?: number;
+  }) => void;
 }
 
 type PersistedAuthState = Pick<
@@ -41,13 +50,21 @@ export const useAuthStore = create<AuthState>()(
       refreshToken: null,
       tokenExpiry: null,
 
-      setAuth: (user, token, refreshToken, expiresIn = 86_400_000) => {
+      setAuth: (user, token, refreshToken, expiresIn = 86400) => {
         // Default: 24h
         set({
           user,
           token,
           refreshToken,
-          tokenExpiry: Date.now() + expiresIn,
+          tokenExpiry: Date.now() + expiresIn * 1000,
+        });
+      },
+
+      updateTokens: ({ token, refreshToken, expiresIn = 86400 }) => {
+        set({
+          token,
+          refreshToken,
+          tokenExpiry: Date.now() + expiresIn * 1000,
         });
       },
 
@@ -77,8 +94,8 @@ export const useAuthStore = create<AuthState>()(
           // SSR / restricted environments
           return {
             getItem: () => null,
-            setItem: () => {},
-            removeItem: () => {},
+            setItem: () => { },
+            removeItem: () => { },
           };
         }
       }),
@@ -89,12 +106,6 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: state.refreshToken,
         tokenExpiry: state.tokenExpiry,
       }),
-
-      onRehydrateStorage: () => (state) => {
-        if (state && !state.isTokenValid()) {
-          state.logout();
-        }
-      },
 
       migrate: (
         persistedState: unknown,

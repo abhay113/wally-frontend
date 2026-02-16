@@ -17,33 +17,9 @@ import ProfilePage from "@/pages/Profile";
 import AdminPage from "@/pages/Admin";
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const { token, isTokenValid, logout } = useAuthStore();
-  const [isChecking, setIsChecking] = useState(true);
+  const isAuth = useAuthStore((s) => s.isTokenValid());
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      if (token && !isTokenValid()) {
-        console.log("Token expired, logging out");
-        logout();
-      }
-      setIsChecking(false);
-    };
-
-    checkAuth();
-  }, [token, isTokenValid, logout]);
-
-  if (isChecking) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!token || !isTokenValid()) {
+  if (!isAuth) {
     return <Navigate to="/login" replace />;
   }
 
@@ -51,9 +27,9 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
-  const { token, isTokenValid } = useAuthStore();
+  const isAuth = useAuthStore((s) => s.isTokenValid());
 
-  if (token && isTokenValid()) {
+  if (isAuth) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -61,9 +37,9 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, token, isTokenValid } = useAuthStore();
+  const { user, isTokenValid } = useAuthStore();
 
-  if (!token || !isTokenValid()) {
+  if (!isTokenValid()) {
     return <Navigate to="/login" replace />;
   }
 
@@ -75,6 +51,30 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = useAuthStore.persist.onFinishHydration(() => {
+      setIsLoading(false);
+    });
+
+    if (useAuthStore.persist.hasHydrated()) {
+      setIsLoading(false);
+    }
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
     <ErrorBoundary>
       <NetworkStatus />

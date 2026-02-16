@@ -19,10 +19,18 @@ const API_BASE_URL = env.apiUrl;
 // Store reference to avoid circular dependencies
 let getAuthToken: (() => string | null) | null = null;
 let getRefreshToken: (() => string | null) | null = null;
-let isTokenValid: (() => boolean) | null = null;
+// let isTokenValid: (() => boolean) | null = null;
 let logoutUser: (() => void) | null = null;
 let updateTokens:
-  | ((tokens: { token: string; refreshToken: string }) => void)
+  | (({
+    token,
+    refreshToken,
+    expiresIn,
+  }: {
+    token: string;
+    refreshToken: string;
+    expiresIn?: number;
+  }) => void)
   | null = null;
 
 // Initialize auth store references
@@ -31,11 +39,15 @@ export const initializeApiClient = (authStore: {
   getRefreshToken: () => string | null;
   isTokenValid: () => boolean;
   logout: () => void;
-  updateTokens: (tokens: { token: string; refreshToken: string }) => void;
+  updateTokens: (tokens: {
+    token: string;
+    refreshToken: string;
+    expiresIn?: number;
+  }) => void;
 }) => {
   getAuthToken = authStore.getToken;
   getRefreshToken = authStore.getRefreshToken;
-  isTokenValid = authStore.isTokenValid;
+  // isTokenValid = authStore.isTokenValid;
   logoutUser = authStore.logout;
   updateTokens = authStore.updateTokens;
 };
@@ -130,10 +142,10 @@ apiClient.interceptors.response.use(
             { refreshToken },
           );
 
-          const { token, refreshToken: newRefreshToken } = response.data;
+          const { token, refreshToken: newRefreshToken, expiresIn } = response.data;
 
           // Update tokens in store
-          updateTokens?.({ token, refreshToken: newRefreshToken });
+          updateTokens?.({ token, refreshToken: newRefreshToken, expiresIn });
 
           // Update header for original request
           originalRequest.headers.Authorization = `Bearer ${token}`;
