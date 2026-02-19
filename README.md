@@ -88,3 +88,6 @@ The app expects a REST API with the following endpoints:
 ## License
 
 MIT
+
+
+<!-- Things to do : create the funding api and the funding page also the  -->
