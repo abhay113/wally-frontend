@@ -20,7 +20,6 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import type { User, AdminStats } from '@/lib/types'
 import { adminApi } from '@/lib/api'
 
-// Animated counter for stats
 function AnimatedStat({ value, prefix = '', suffix = '' }: { value: number; prefix?: string; suffix?: string }) {
   const [displayValue, setDisplayValue] = useState(0)
   const startTime = useRef<number | null>(null)
